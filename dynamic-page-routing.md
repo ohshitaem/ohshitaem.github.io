@@ -1,10 +1,3 @@
----
-title: "Dynamic Page Routing in AEM CIF Components"
-date: 2025-12-05
-draft: false
-type: post
----
-
 # Dynamic Page Routing in AEM CIF Components
 
 > [!NOTE]
@@ -116,7 +109,6 @@ The `SpecificPageFilterFactory` acts as a dynamic dispatcher. When "Specific Pag
                 *   It considers the `SELECTOR_FILTER_TYPE_PROPERTY` (e.g., `"uidAndUrlPath"`) to correctly parse the filter values.
                 *   It attempts to match these filters against `params.getUid()`, `params.getUrlPath()`, and `params.getUrlKey()` from the current request.
                 *   The `matchesUrlPath` and `matchesUrlKey` helper methods are used, accounting for exact matches and subcategory inclusion (`INCLUDES_SUBCATEGORIES_PROPERTY`).
-    *   **Output:** The first `Page` found that.
     *   **Output:** The first `Page` found that satisfies both being a specific page candidate and matching the provided commerce parameters is returned.
 
 ## 4. How `isGenerateSpecificPageUrlsEnabled()` and `getGenericPage` Work Together
@@ -166,6 +158,7 @@ graph TD
     J --> K[Internal Forward to Specific Page Content]
     K --> F
 ```
+
 ## 6. Reusability Outside of Magento
 
 The dynamic page routing framework within AEM CIF components, as exemplified by [`SpecificPageFilterFactory.java`](https://github.com/adobe/aem-core-cif-components/tree/core-cif-components-reactor-2.17.4/bundles/core/src/main/java/com/adobe/cq/commerce/core/components/internal/servlets/SpecificPageFilterFactory.java) and [`SpecificPageStrategy.java`](https://github.com/adobe/aem-core-cif-components/tree/core-cif-components-reactor-2.17.4/bundles/core/src/main/java/com/adobe/cq/commerce/core/components/internal/services/SpecificPageStrategy.java), is **moderately reusable** outside of Magento, but it requires significant adaptation and customization.
@@ -184,7 +177,7 @@ The dynamic page routing framework within AEM CIF components, as exemplified by 
     These properties are explicitly named `MAGENTO` and are used to configure AEM pages as roots for specific parts of a Magento catalog. If integrating with a non-Magento platform, these property names and their underlying concepts would need to be re-mapped, replaced, or entirely re-implemented to match the target platform's structure.
 *   **[`UrlProviderImpl`](https://github.com/adobe/aem-core-cif-components/tree/core-cif-components-reactor-2.17.4/bundles/core/src/main/java/com/adobe/cq/commerce/core/components/internal/services/UrlProviderImpl.java) Implementation:** While [`UrlProviderImpl`](https://github.com/adobe/aem-core-cif-components/tree/core-cif-components-reactor-2.17.4/bundles/core/src/main/java/com/adobe/cq/commerce/core/components/internal/services/UrlProviderImpl.java) is referenced, its internal implementation (which is not part of the provided files but is crucial to CIF) is responsible for parsing URLs and populating `ProductUrlFormat.Params` and `CategoryUrlFormat.Params`. This implementation is tightly coupled to Magento's URL structure, data models, and GraphQL/REST APIs. For a different commerce platform, a custom `UrlProvider` implementation would be essential to correctly interpret and extract commerce identifiers from URLs.
 *   **Data Model Assumptions:** The parameters within `ProductUrlFormat.Params` and `CategoryUrlFormat.Params` (e.g., `sku`, `urlKey`, `urlPath`, `uid`) are derived from Magento's data model. While these are common commerce attributes, their exact behavior, availability, and precedence might vary across platforms.
-*   **Configuration of "Specific Pages":** The properties used on AEM pages to mark them as "specific" (`SELECTOR_FILTER_PROPERTY`, etc.) would need to be configured by authors using identifiers (SKUs, IDs, URL paths) that are valid and relevant to the new commerce backend.
+*   **Configuration of "Specific Pages":** The properties used on AEM pages to mark them as "specific" (`SELECTOR_FILTER_PROPERTY`, `PN_USE_FOR_CATEGORIES`, `SELECTOR_FILTER_TYPE_PROPERTY`) would need to be configured by authors using identifiers (SKUs, IDs, URL paths) that are valid and relevant to the new commerce backend.
 
 ### Summary of Adaptation Needed:
 
@@ -195,5 +188,3 @@ To leverage this framework with a commerce platform other than Magento, you woul
 3.  **Configure AEM Pages:** Ensure that the AEM page properties (`SELECTOR_FILTER_PROPERTY`, etc.) used to define specific pages are correctly populated with identifiers from the non-Magento commerce platform.
 
 In essence, you can leverage the architectural pattern and some of the core interfaces, but the concrete Magento-specific implementations would need to be replaced or significantly extended to work with a different commerce backend.
-
-
