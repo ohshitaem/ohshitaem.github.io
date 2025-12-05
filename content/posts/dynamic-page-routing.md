@@ -111,12 +111,11 @@ The `SpecificPageFilterFactory` acts as a dynamic dispatcher. When "Specific Pag
                 *   It retrieves configured `productUrlKeys` (SKUs/URL keys) from the page's `SELECTOR_FILTER_PROPERTY`.
                 *   It attempts to match these `productUrlKeys` against the `params.getUrlKey()` and `params.getSku()` from the current request.
                 *   If the product `params` include category information, it also checks the page's `PN_USE_FOR_CATEGORIES` property against `params.getCategoryUrlParams().getUrlPath()` and `params.getCategoryUrlParams().getUrlKey()`, optionally considering `INCLUDES_SUBCATEGORIES_PROPERTY` for hierarchical matching.
-            *   **For Categories (`isSpecificPageFor(Page candidate, CategoryUrlFormat.Params params)`):**
+            *   **For Categories (`isSpecificPageFor(Page candidate, CategoryUrlFormat.Params params)`):):**
                 *   It retrieves configured `filters` (category UIDs, URL paths, URL keys) from the page's `SELECTOR_FILTER_PROPERTY` (or `PN_USE_FOR_CATEGORIES`).
                 *   It considers the `SELECTOR_FILTER_TYPE_PROPERTY` (e.g., `"uidAndUrlPath"`) to correctly parse the filter values.
                 *   It attempts to match these filters against `params.getUid()`, `params.getUrlPath()`, and `params.getUrlKey()` from the current request.
                 *   The `matchesUrlPath` and `matchesUrlKey` helper methods are used, accounting for exact matches and subcategory inclusion (`INCLUDES_SUBCATEGORIES_PROPERTY`).
-    *   **Output:** The first `Page` found that.
     *   **Output:** The first `Page` found that satisfies both being a specific page candidate and matching the provided commerce parameters is returned.
 
 ## 4. How `isGenerateSpecificPageUrlsEnabled()` and `getGenericPage` Work Together
@@ -149,23 +148,56 @@ In this mode, the system relies on generic page templates combined with dynamic 
     *   Finally, it performs an *internal forward* using a `RequestDispatcher` to the content resource of this identified specific page. This means the user's browser still shows the generic URL, but the content rendered is from the specific page.
 
 ## 5. Logic Flow Diagram
-
 ```mermaid
 graph TD
-    A[Start: Request/URL Generation] --> B{isGenerateSpecificPageUrlsEnabled?}
+    A[Start: URL Generation or HTTP Request] --> B{isGenerateSpecificPageUrlsEnabled?};
 
-    B -->|True Enabled| C[URL Generation UrlProviderImpl]
-    C --> D[Generate URL pointing directly to Specific Page]
-    D --> E[SpecificPageFilterFactory]
-    E --> F[Specific Page Rendered]
-
-    B -->|False Disabled| G[URL Generation UrlProviderImpl]
-    G --> H[Generate URL pointing to Generic Page]
-    H --> I[SpecificPageFilterFactory Intercepts Generic Page Request]
-    I --> J{Filter identifies Specific Page}
-    J --> K[Internal Forward to Specific Page Content]
-    K --> F
+    subgraph " "
+        subgraph "<b>Mode 1: Specific Page URLs Enabled</b>"
+            direction TB
+            B -- True --> C["<b>1. URL Generation (UrlProviderImpl)</b><br/>Calls getSpecificPage()"];
+            C --> D[SpecificPageStrategy];
+            D --> E{Specific Page Found?};
+    
+            E -- Yes --> F["URL → Direct link to specific page<br/><i>e.g., /products/my-product.html</i>"];
+            
+            E -- "No (Fallback)" --> G["UrlProviderImpl calls getGenericPage()"];
+            G --> H[SpecificPageStrategy];
+            H --> I["URL → Link to generic page w/ selector<br/><i>e.g., /product-page.html/SKU</i>"];
+            
+            subgraph "<b>2. Request Handling</b>"
+                F -- Request --> J["<b>SpecificPageFilterFactory</b><br/>Sees isGenerate...() is true"];
+                J --> K[Bypasses routing logic];
+                K --> L[AEM renders the specific page directly];
+                
+                I -- Request for Generic URL --> M(Go to Mode 2 Request Handling);
+            end
+        end
+    
+        subgraph "<b>Mode 2: Specific Page URLs Disabled</b>"
+            direction TB
+            B -- False --> N["<b>1. URL Generation (UrlProviderImpl)</b><br/>Calls getGenericPage()"];
+            N --> O[SpecificPageStrategy];
+            O --> P["URL → Link to generic page w/ selector<br/><i>e.g., /product-page.html/SKU</i>"];
+    
+            subgraph M ["<b>2. Request Handling</b>"]
+                P -- Request for Generic URL --> Q["<b>SpecificPageFilterFactory</b><br/>Sees isGenerate...() is false"];
+                Q --> R{"Is Commerce Page?<br/>(uses SiteStructureFactory)"};
+                R -- No --> S["Proceed down filter chain<br/>(renders generic page)"];
+                
+                R -- Yes --> T["Filter calls getSpecificPage()"];
+                T --> U[SpecificPageStrategy];
+                U --> V{Specific Page Found?};
+    
+                V -- Yes --> W[Internal forward to specific page];
+                W --> X["Render Specific Page Content<br/>(URL remains generic)"];
+    
+                V -- "No (Fallback)" --> S;
+            end
+        end
+    end
 ```
+
 ## 6. Reusability Outside of Magento
 
 The dynamic page routing framework within AEM CIF components, as exemplified by [`SpecificPageFilterFactory.java`](https://github.com/adobe/aem-core-cif-components/tree/core-cif-components-reactor-2.17.4/bundles/core/src/main/java/com/adobe/cq/commerce/core/components/internal/servlets/SpecificPageFilterFactory.java) and [`SpecificPageStrategy.java`](https://github.com/adobe/aem-core-cif-components/tree/core-cif-components-reactor-2.17.4/bundles/core/src/main/java/com/adobe/cq/commerce/core/components/internal/services/SpecificPageStrategy.java), is **moderately reusable** outside of Magento, but it requires significant adaptation and customization.
@@ -195,5 +227,3 @@ To leverage this framework with a commerce platform other than Magento, you woul
 3.  **Configure AEM Pages:** Ensure that the AEM page properties (`SELECTOR_FILTER_PROPERTY`, etc.) used to define specific pages are correctly populated with identifiers from the non-Magento commerce platform.
 
 In essence, you can leverage the architectural pattern and some of the core interfaces, but the concrete Magento-specific implementations would need to be replaced or significantly extended to work with a different commerce backend.
-
-
