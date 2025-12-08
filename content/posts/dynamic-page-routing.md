@@ -3,6 +3,7 @@ title: "Dynamic Page Routing in AEM CIF Components"
 date: 2025-12-05
 draft: false
 type: post
+tags: [commerce, seo, cif]
 ---
 
 # Dynamic Page Routing in AEM CIF Components
