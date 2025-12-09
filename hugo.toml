@@ -1,6 +1,6 @@
 baseURL = 'https://ohshitaem.github.io'
 languageCode = 'en-us'
-title = 'My New Hugo Site'
+title = 'Oh Shit AEM'
 theme = 'hugo-book'
 
 # (Optional) Set this to true to enable 'Last Modified by' date and git author
