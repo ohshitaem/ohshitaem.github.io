@@ -14,8 +14,10 @@ When working with URL rewriting and resource resolution in Apache Sling and Adob
 ## What Are The Mapping Mechanisms?
 
 1.  **`resource.resolver.map.location`**: An OSGi configuration property on `org.apache.sling.jcr.resource.internal.JcrResourceResolverFactoryImpl` that points to a path in the JCR where mapping rules are defined. The default and conventional path is `/etc/map`. This mechanism is powerful, supporting regular expressions and complex hierarchical rule sets.
+    *   *Code Reference*: Defined in `ResourceResolverFactoryConfig.java` and used in `ResourceResolverFactoryActivator.java` ([L208](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/ResourceResolverFactoryActivator.java#L208)). Default value `DEFAULT_MAP_ROOT` in `MapEntries.java` ([L98](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntries.java#L98)) is `/etc/map`.
 
 2.  **`resource.resolver.mapping`**: A multi-value `String[]` OSGi property on the same factory. It allows you to define **simple, literal string-based path mappings** directly in your configuration, which is ideal for environment-specific, code-managed rules.
+    *   *Code Reference*: Defined in `ResourceResolverFactoryConfig.java` and used in `ResourceResolverFactoryActivator.java` ([L181](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/ResourceResolverFactoryActivator.java#L181)). The `Mapping` class handles these mappings via string prefixes, not regex, as seen in `Mapping.java` methods like `mapUri` ([L91](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/Mapping.java#L91)) and `mapHandle` ([L107](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/Mapping.java#L107)).
 
 Both mechanisms are used by the Sling `ResourceResolver` to:
 - Map a resource path to an external URL (outgoing links).
@@ -23,24 +25,30 @@ Both mechanisms are used by the Sling `ResourceResolver` to:
 
 ## How It Works
 
-The `JcrResourceResolverFactoryImpl` loads mappings from both sources at startup or upon configuration change.
+The `JcrResourceResolverFactoryImpl` (implemented by `ResourceResolverFactoryActivator`) loads mappings from both sources at startup or upon configuration change.
+*   *Code Reference*: `ResourceResolverFactoryActivator.java`'s `activate` method ([L171](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/ResourceResolverFactoryActivator.java#L171)) handles initial loading, and the `modified` method ([L359](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/ResourceResolverFactoryActivator.java#L359)) ensures reload on configuration changes.
 
 1.  **OSGi configuration** — rules defined in `resource.resolver.mapping` (simple string patterns, no regex).
 2.  **JCR content tree** — rules stored under the path specified by `resource.resolver.map.location` (supports regex via `sling:match`).
 
 These rules are compiled into a single, unified list of `MapEntry` objects.
+*   *Code Reference*: `MapEntries.java` extensively uses and creates `MapEntry` objects, e.g., in `gather` ([L752](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntries.java#L752)) and `addEntry` ([L806](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntries.java#L806)).
 
 ### The Regular Expression Engine
 
 When regular expressions are used (exclusively via `sling:match` in the JCR), Sling uses Java's standard regex engine, `java.util.regex.Pattern`. This means any pattern compatible with Java's regex flavor is supported.
+*   *Code Reference*: `MapEntry.java` uses `java.util.regex.Pattern` for `urlPattern` ([L64](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntry.java#L64)) and `java.util.regex.Matcher` for matching ([L195](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntry.java#L195)).
 
 ### Evaluation Order
 
-A common point of confusion is how rules from different sources are prioritized. The key is that **all rules are merged into a single list and sorted**, with no inherent precedence given to the source (OSGi vs. JCR). The sorting logic is defined in the [`MapEntry.java`](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntry.java)'s `compareTo` method and follows these criteria:
+A common point of confusion is how rules from different sources are prioritized. The key is that **all rules are merged into a single list and sorted**, with no inherent precedence given to the source (OSGi vs. JCR). The sorting logic is defined in the [`MapEntry.java`](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntry.java#L241)'s `compareTo` method and follows these criteria:
 
 1.  **Pattern Length (Descending)**: Longer, more-specific patterns are always evaluated before shorter, more-general ones. For example, a rule for `/content/myapp/en/` will be checked before a rule for `/content/myapp/`. This is the most critical factor in determining order.
+    *   *Code Reference*: `MapEntry.java` `compareTo` ([L247-L251](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntry.java#L247-L251)).
 2.  **Lexicographical Order**: If two patterns have the same length, they are sorted alphabetically.
+    *   *Code Reference*: `MapEntry.java` `compareTo` ([L255](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntry.java#L255)).
 3.  **Vanity Order**: For vanity paths with identical patterns, the `sling:vanityOrder` property is used as a final tie-breaker.
+    *   *Code Reference*: `MapEntry.java` `compareTo` ([L256-L260](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntry.java#L256-L260)).
 
 This unified and sorted list is then traversed top-down at runtime until a rule matches.
 
@@ -49,16 +57,22 @@ This unified and sorted list is then traversed top-down at runtime until a rule 
 The behavior of JCR-based mappings under `/etc/map` is controlled by several `sling:` properties:
 
 -   `sling:match`: Defines a **regular expression** for matching the incoming request URL or path. If this property is absent, the node's name is used as a literal prefix match. This is the primary way to enable regex-based matching.
+    *   *Code Reference*: `MapEntries.java` `PROP_REG_EXP` ([L82](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntries.java#L82)).
 
 -   `sling:internalRedirect`: Specifies the target path for an **internal rewrite**. The resource resolver transparently continues the resolution process using the new path without informing the client. It can be a multi-valued property (`String[]`) to provide multiple candidate paths. This is signaled internally by a `MapEntry` with a status of `-1`.
+    *   *Code Reference*: Used in `MapEntry.java` `createResolveEntry` to create a `MapEntry` with status `-1` ([L133](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntry.java#L133)).
 
 -   `sling:redirect`: Specifies a target URL for an **external redirect**. This causes the resolver to issue an HTTP 3xx response to the client, telling it to navigate to the new URL.
+    *   *Code Reference*: `MapEntries.java` `PROP_REDIRECT_EXTERNAL` ([L84](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntries.java#L84)).
 
--   `sling:status`: Used with `sling:redirect` to specify the HTTP status code for the external redirect (e.g., `301` for permanent, `302` for temporary).
+-   `sling:status`: Used with `sling:redirect` to specify the HTTP status code for the external redirect (e.g., `301` for permanent, `302` for temporary). For vanity paths, the property `sling:redirectStatus` is specifically used to define the status code.
+    *   *Code Reference*: `MapEntries.java` `PROP_REDIRECT_EXTERNAL_STATUS` ([L86](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntries.java#L86)) and `PROP_REDIRECT_EXTERNAL_REDIRECT_STATUS` ([L88](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntries.java#L88)). In `loadVanityPath`, `sling:redirectStatus` is used ([L911](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntries.java#L911)).
 
 -   `sling:alias`: Set on a content resource (not a mapping rule) to provide an alternative, "friendly" name for that resource. This is used for generating outgoing links and can also be used to resolve incoming requests. For example, a resource at `/content/products/p-001` could have an alias `shiny-red-ball`, allowing it to be accessed via `/content/products/shiny-red-ball`.
+    *   *Code Reference*: Referenced as `ResourceResolverImpl.PROP_ALIAS` and handled in `MapEntries.java` in methods like `doAddAlias` ([L480](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntries.java#L480)) and `loadAlias` ([L703](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntries.java#L703)).
 
 -   `sling:vanityPath` & `sling:vanityOrder`: `sling:vanityPath` is set on a content resource to claim a user-friendly URL. These are loaded into the mapping tables as internal redirects. `sling:vanityOrder` (a `Long`) resolves conflicts if multiple resources claim the same vanity path.
+    *   *Code Reference*: `MapEntries.java` `PROP_VANITY_PATH` ([L90](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntries.java#L90)) and `PROP_VANITY_ORDER` ([L92](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntries.java#L92)) are used in methods like `loadVanityPaths` and `loadVanityPath`.
 
 ## Hierarchical Mapping Structures
 
@@ -66,19 +80,23 @@ One of the most powerful features of JCR-based mappings is the ability to organi
 
 ### How Hierarchies Create Patterns
 
-The mapping resolution engine processes the JCR tree through a recursive, depth-first traversal implemented in the [`gather` method of `MapEntries.java`](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntries.java). As it descends the tree, it **progressively builds URL patterns by concatenating path segments** from each level of the hierarchy.
+The mapping resolution engine processes the JCR tree through a recursive, depth-first traversal implemented in the [`gather` method of `MapEntries.java`](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntries.java#L752). As it descends the tree, it **progressively builds URL patterns by concatenating path segments** from each level of the hierarchy.
 
 For each node in the tree:
 
 1. **Pattern Segment Determination**: The node contributes a segment to the pattern based on:
     - The value of its `sling:match` property (if present), or
     - Its node name followed by `/` (if `sling:match` is absent)
+    *   *Code Reference*: `MapEntries.java` `gather` method, lines ([L761-L763](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntries.java#L761-L763)) show pattern segment determination using `PROP_REG_EXP` or child name.
 
 2. **Pattern Concatenation**: This segment is appended to the pattern inherited from its parent node, creating a cumulative pattern that reflects the full path from the root mapping node.
+    *   *Code Reference*: `MapEntries.java` `gather` method, line ([L765](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntries.java#L765)).
 
 3. **Recursive Processing**: Before creating a mapping entry for the current node, the engine recursively processes all of its child nodes with the current cumulative pattern as their parent path.
+    *   *Code Reference*: `MapEntries.java` `gather` method, lines ([L770-L771](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntries.java#L770-L771)).
 
 4. **Entry Creation**: After all children have been processed, a `MapEntry` is created for the current node using its fully constructed pattern.
+    *   *Code Reference*: `MapEntries.java` `gather` method, line ([L775](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntries.java#L775)).
 
 ### Example: Building Patterns from Hierarchy
 
@@ -121,6 +139,7 @@ Several of the `sling:` properties can be defined as a multi-valued string array
 ### `sling:internalRedirect`
 
 When a mapping node has a multivalued `sling:internalRedirect` property, it provides a list of potential target paths for the rewrite. While multiple paths can be defined, the resource resolver's implementation will use the **first successful path** generated from the array for continuing the resolution process. This provides a fallback mechanism, but not a one-to-many rewrite for a single request.
+*   *Code Reference*: In `MapEntry.java`, `createResolveEntry` filters out regex in `sling:internalRedirect` using `filterRegExp` ([L132](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntry.java#L132)). The `replace` method ([L195](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntry.java#L195)) iterates through `redirects` and returns the first successful one.
 
 ### `sling:alias`
 
@@ -128,15 +147,17 @@ A content resource can have multiple aliases. This has two main effects:
 
 -   **Incoming Resolution**: Any of the defined aliases can be used in a URL to resolve to the resource. For example, if a resource has aliases `foo` and `bar`, both `/content/mypage/foo` and `/content/mypage/bar` would resolve to the same underlying resource.
 -   **Outgoing Mapping**: When generating URLs for the resource (e.g., via `ResourceMapper.getAllMappings()`), all its aliases are considered valid "friendly" names and will be included in the list of possible mappings.
+*   *Code Reference*: `MapEntries.java` `loadAlias` method ([L699](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntries.java#L699)) processes multiple `sling:alias` values from `aliasArray`.
 
 ### `sling:vanityPath`
 
 Each entry in a multivalued `sling:vanityPath` property creates a separate, independent mapping rule. This allows a single content resource to be accessible from multiple distinct vanity URLs. For example, a resource can have `sling:vanityPath` set to `["/my-product", "/products/my-product"]`, and both URLs will resolve to it.
+*   *Code Reference*: `MapEntries.java` `loadVanityPath` method ([L890](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntries.java#L890)) iterates through `pVanityPaths` to create individual entries.
 
 ## OSGi Mappings vs. JCR Mappings
 
 | Aspect                | OSGi `resource.resolver.mapping`        | JCR `/etc/map`                                       |
-| --------------------- | --------------------------------------- | ---------------------------------------------------- |
+| :-------------------- | :-------------------------------------- | :--------------------------------------------------- |
 | **Pattern Type**      | Simple string paths (no regex)          | Regex patterns via `sling:match`                     |
 | **Flexibility**       | Limited; exact path matching only       | Full regex support; complex hierarchies              |
 | **Storage**           | Code/configuration (`.cfg.json`)        | Content repository (JCR)                             |
