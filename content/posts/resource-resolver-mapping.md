@@ -52,26 +52,274 @@ A common point of confusion is how rules from different sources are prioritized.
 
 This unified and sorted list is then traversed top-down at runtime until a rule matches.
 
+## Node Structures for Resolver and Mapping Entries
+
+Before diving into the specific `sling:` directives, it's important to understand how nodes are structured to create the two types of map entries: **Resolver Map Entries** (for incoming requests) and **Mapping Map Entries** (for outgoing URLs).
+
+### Resolver Map Entries (Incoming: URL → Resource)
+
+These entries map incoming request URLs to resource paths in the repository. They are created from two primary sources:
+
+#### A. From `/etc/map` Nodes
+
+Nodes are created hierarchically under `/etc/map` to represent the URL structure. The node type is typically `sling:Mapping`, though any node type with the correct properties will work.
+
+**Example Structure:**
+
+```
+/etc/map/
+  +-- http/  (sling:Mapping)
+       +-- my.host.com.8080/  (sling:Mapping)
+            - sling:internalRedirect = "/content/mysite"
+            +-- products/  (sling:Mapping)
+                 - sling:match = "product-(.*)"
+                 - sling:internalRedirect = "/content/products/$1"
+            +-- about-us.html  (sling:Mapping)
+                 - sling:redirect = "https://company.com/about"
+                 - sling:status = 301
+```
+
+**How Patterns are Formed:**
+
+The resource resolver traverses this tree, and the path to a node, combined with its `sling:match` property (or the node name if `sling:match` is absent), creates the URL pattern.
+
+- `/etc/map/http/my.host.com.8080` creates the pattern `http/my.host.com.8080/`
+- The child node `products` with `sling:match = "product-(.*)"` creates the full pattern `http/my.host.com.8080/product-(.*)`
+
+**Key Properties:**
+
+- **`sling:internalRedirect`** (String or String[]): Specifies the repository path for an internal rewrite. The resolver transparently uses this new path to continue the resolution process.
+- **`sling:redirect`** (String): Specifies a target URL for an external redirect, instructing the client to navigate to a new URL via an HTTP 3xx response.
+- **`sling:status`** (Long): Used with `sling:redirect` to specify the HTTP status code (e.g., 301 for permanent, 302 for temporary). Defaults to 302 if omitted.
+- **`sling:match`** (String): An optional regular expression used for a segment of the URL instead of the node's name, allowing for flexible pattern matching.
+
+#### B. From Vanity Paths on Content
+
+Vanity paths are defined directly on content nodes to make them accessible via "friendly" URLs.
+
+**Example Structure:**
+
+```
+/content/mysite/en/products/
+  +-- my-product/  (cq:Page)
+       +-- jcr:content/
+            - sling:vanityPath = "/my-product"
+            - sling:redirect = true  (optional)
+            - sling:redirectStatus = 301  (optional)
+```
+
+**Key Properties:**
+
+- **`sling:vanityPath`** (String or String[]): Required. The desired user-friendly URL path(s). Creates an internal redirect from the vanity path to the resource.
+- **`sling:redirect`** (Boolean): Optional. If true, the vanity path will issue an external redirect to the resource's mapped path instead of an internal rewrite.
+- **`sling:redirectStatus`** (Long): Optional. Specifies the HTTP status code for the external redirect.
+- **`sling:vanityOrder`** (Long): Optional. A numerical value to determine precedence when multiple resources claim the same vanity path. Higher values have higher precedence.
+
+### Mapping Map Entries (Outgoing: Resource Path → URL)
+
+These entries are used to generate public-facing URLs from repository paths. They are created from `/etc/map` nodes and `sling:alias` properties on content.
+
+#### A. From `/etc/map` Nodes
+
+The same node structure under `/etc/map` is used, but the `sling:internalRedirect` property is interpreted as the **source** (the resource path to match), and the node's path in the hierarchy is interpreted as the **destination** (the URL to generate).
+
+**Example Structure:**
+
+```
+/etc/map/
+  +-- http/
+       +-- my.host.com.8080/
+            - sling:internalRedirect = "/content/mysite"
+```
+
+This rule maps the resource path `/content/mysite` to the URL `http://my.host.com:8080/`.
+
+**Key Properties:**
+
+- **`sling:internalRedirect`** (String or String[]): Required. This property now defines the resource path pattern to be mapped.
+- The node's path (e.g., `http/my.host.com.8080`) defines the output URL prefix.
+
+**Note:** Rules with `sling:redirect` (external redirects) and regex in `sling:match` are ignored when building the mapping table.
+
+**Note:** Rules with `sling:redirect` (external redirects) and regex in `sling:match` are ignored when building the mapping table.
+
+**Critical Limitation - No Variables in Outgoing Mappings:**
+
+There is a significant limitation on the syntax of `sling:internalRedirect` when creating Mapping Map Entries. The values **cannot contain variables from regular expression capture groups** (e.g., `$1`, `$2`).
+
+Here's why:
+
+1. **Role Reversal**: For incoming resolution (URL → Resource), `sling:match` captures parts of the URL, and `sling:internalRedirect` can use `$1` to insert those captured parts into the resource path. For outgoing mapping (Resource Path → URL), the roles are reversed - the value of `sling:internalRedirect` becomes the pattern to match against a resource's path, and the URL is the replacement.
+
+2. **No Capture Groups Available**: When mapping an outgoing path like `/content/mysite/about.html`, there is no regular expression capture group in play. The path is a literal string. A pattern in `sling:internalRedirect` like `/content/$1/about.html` would be meaningless because there is no source for the `$1` variable.
+
+3. **Code Enforcement**: The logic in `MapEntry.java`'s `createMapEntry` method explicitly prevents this by skipping any `sling:internalRedirect` values that contain a `$` character:
+   ```java
+   final String[] internalRedirect = props.get(ResourceResolverImpl.PROP_REDIRECT_INTERNAL, String[].class);
+   if (internalRedirect != null) {
+       for (final String redir : internalRedirect) {
+           if (!redir.contains("$")) { // Enforces the limitation
+               // create the MapEntry
+           }
+       }
+   }
+   ```
+
+**In summary**: For creating outgoing Mapping Map Entries, the `sling:internalRedirect` property must contain only **literal paths** that you want to map from. Any entry containing a `$` will be ignored for the purpose of outgoing URL mapping.
+
+#### B. From Aliases on Content
+
+Aliases provide alternative, "friendly" names for resources within their parent, which affects outgoing URL generation.
+
+**Example Structure:**
+
+```
+/content/mysite/en/
+  +-- about_us/  (cq:Page)
+       +-- jcr:content/
+            - sling:alias = "about"
+```
+
+When mapping the resource `/content/mysite/en/about_us`, the resource resolver can generate the path `/content/mysite/en/about`.
+
+**Key Properties:**
+
+- **`sling:alias`** (String or String[]): Required. An alternative name or set of names for the resource. This name will be used instead of the actual node name when constructing a URL.
+
+## Node Structures for Resolver and Mapping Entries
+
+Before diving into the specific `sling:` directives, it's important to understand how nodes are structured to create the two types of map entries: **Resolver Map Entries** (for incoming requests) and **Mapping Map Entries** (for outgoing URLs).
+
+### Resolver Map Entries (Incoming: URL → Resource)
+
+These entries map incoming request URLs to resource paths in the repository. They are created from two primary sources:
+
+#### A. From `/etc/map` Nodes
+
+Nodes are created hierarchically under `/etc/map` to represent the URL structure. The node type is typically `sling:Mapping`, though any node type with the correct properties will work.
+
+**Example Structure:**
+
+```
+/etc/map/
+  +-- http/  (sling:Mapping)
+       +-- my.host.com.8080/  (sling:Mapping)
+            - sling:internalRedirect = "/content/mysite"
+            +-- products/  (sling:Mapping)
+                 - sling:match = "product-(.*)"
+                 - sling:internalRedirect = "/content/products/$1"
+            +-- about-us.html  (sling:Mapping)
+                 - sling:redirect = "https://company.com/about"
+                 - sling:status = 301
+```
+
+**How Patterns are Formed:**
+
+The resource resolver traverses this tree, and the path to a node, combined with its `sling:match` property (or the node name if `sling:match` is absent), creates the URL pattern.
+
+- `/etc/map/http/my.host.com.8080` creates the pattern `http/my.host.com.8080/`
+- The child node `products` with `sling:match = "product-(.*)"` creates the full pattern `http/my.host.com.8080/product-(.*)`
+
+**Key Properties:**
+
+- **`sling:internalRedirect`** (String or String[]): Specifies the repository path for an internal rewrite. The resolver transparently uses this new path to continue the resolution process.
+- **`sling:redirect`** (String): Specifies a target URL for an external redirect, instructing the client to navigate to a new URL via an HTTP 3xx response.
+- **`sling:status`** (Long): Used with `sling:redirect` to specify the HTTP status code (e.g., 301 for permanent, 302 for temporary). Defaults to 302 if omitted.
+- **`sling:match`** (String): An optional regular expression used for a segment of the URL instead of the node's name, allowing for flexible pattern matching.
+
+#### B. From Vanity Paths on Content
+
+Vanity paths are defined directly on content nodes to make them accessible via "friendly" URLs.
+
+**Example Structure:**
+
+```
+/content/mysite/en/products/
+  +-- my-product/  (cq:Page)
+       +-- jcr:content/
+            - sling:vanityPath = "/my-product"
+            - sling:redirect = true  (optional)
+            - sling:redirectStatus = 301  (optional)
+```
+
+**Key Properties:**
+
+- **`sling:vanityPath`** (String or String[]): Required. The desired user-friendly URL path(s). Creates an internal redirect from the vanity path to the resource.
+- **`sling:redirect`** (Boolean): Optional. If true, the vanity path will issue an external redirect to the resource's mapped path instead of an internal rewrite.
+- **`sling:redirectStatus`** (Long): Optional. Specifies the HTTP status code for the external redirect.
+- **`sling:vanityOrder`** (Long): Optional. A numerical value to determine precedence when multiple resources claim the same vanity path. Higher values have higher precedence.
+
+### Mapping Map Entries (Outgoing: Resource Path → URL)
+
+These entries are used to generate public-facing URLs from repository paths. They are created from `/etc/map` nodes and `sling:alias` properties on content.
+
+#### A. From `/etc/map` Nodes
+
+The same node structure under `/etc/map` is used, but the `sling:internalRedirect` property is interpreted as the **source** (the resource path to match), and the node's path in the hierarchy is interpreted as the **destination** (the URL to generate).
+
+**Example Structure:**
+
+```
+/etc/map/
+  +-- http/
+       +-- my.host.com.8080/
+            - sling:internalRedirect = "/content/mysite"
+```
+
+This rule maps the resource path `/content/mysite` to the URL `http://my.host.com:8080/`.
+
+**Key Properties:**
+
+- **`sling:internalRedirect`** (String or String[]): Required. This property now defines the resource path pattern to be mapped.
+- The node's path (e.g., `http/my.host.com.8080`) defines the output URL prefix.
+
+**Note:** Rules with `sling:redirect` (external redirects) and regex in `sling:match` are ignored when building the mapping table.
+
+#### B. From Aliases on Content
+
+Aliases provide alternative, "friendly" names for resources within their parent, which affects outgoing URL generation.
+
+**Example Structure:**
+
+```
+/content/mysite/en/
+  +-- about_us/  (cq:Page)
+       +-- jcr:content/
+            - sling:alias = "about"
+```
+
+When mapping the resource `/content/mysite/en/about_us`, the resource resolver can generate the path `/content/mysite/en/about`.
+
+**Key Properties:**
+
+- **`sling:alias`** (String or String[]): Required. An alternative name or set of names for the resource. This name will be used instead of the actual node name when constructing a URL.
+
 ## A Deeper Look at `sling:` Directives
 
 The behavior of JCR-based mappings under `/etc/map` is controlled by several `sling:` properties:
 
--   `sling:match`: Defines a **regular expression** for matching the incoming request URL or path. If this property is absent, the node's name is used as a literal prefix match. This is the primary way to enable regex-based matching.
+### `sling:match` 
+- Defines a **regular expression** for matching the incoming request URL or path. If this property is absent, the node's name is used as a literal prefix match. This is the primary way to enable regex-based matching.
     *   *Code Reference*: `MapEntries.java` `PROP_REG_EXP` ([L82](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntries.java#L82)).
 
--   `sling:internalRedirect`: Specifies the target path for an **internal rewrite**. The resource resolver transparently continues the resolution process using the new path without informing the client. It can be a multi-valued property (`String[]`) to provide multiple candidate paths. This is signaled internally by a `MapEntry` with a status of `-1`.
+### `sling:internalRedirect` 
+- Specifies the target path for an **internal rewrite**. The resource resolver transparently continues the resolution process using the new path without informing the client. It can be a multi-valued property (`String[]`) to provide multiple candidate paths. This is signaled internally by a `MapEntry` with a status of `-1`.
     *   *Code Reference*: Used in `MapEntry.java` `createResolveEntry` to create a `MapEntry` with status `-1` ([L133](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntry.java#L133)).
 
--   `sling:redirect`: Specifies a target URL for an **external redirect**. This causes the resolver to issue an HTTP 3xx response to the client, telling it to navigate to the new URL.
+### `sling:redirect`: 
+- Specifies a target URL for an **external redirect**. This causes the resolver to issue an HTTP 3xx response to the client, telling it to navigate to the new URL.
     *   *Code Reference*: `MapEntries.java` `PROP_REDIRECT_EXTERNAL` ([L84](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntries.java#L84)).
 
--   `sling:status`: Used with `sling:redirect` to specify the HTTP status code for the external redirect (e.g., `301` for permanent, `302` for temporary). For vanity paths, the property `sling:redirectStatus` is specifically used to define the status code.
+### `sling:status` 
+- Used with `sling:redirect` to specify the HTTP status code for the external redirect (e.g., `301` for permanent, `302` for temporary). For vanity paths, the property `sling:redirectStatus` is specifically used to define the status code.
     *   *Code Reference*: `MapEntries.java` `PROP_REDIRECT_EXTERNAL_STATUS` ([L86](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntries.java#L86)) and `PROP_REDIRECT_EXTERNAL_REDIRECT_STATUS` ([L88](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntries.java#L88)). In `loadVanityPath`, `sling:redirectStatus` is used ([L911](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntries.java#L911)).
 
--   `sling:alias`: Set on a content resource (not a mapping rule) to provide an alternative, "friendly" name for that resource. This is used for generating outgoing links and can also be used to resolve incoming requests. For example, a resource at `/content/products/p-001` could have an alias `shiny-red-ball`, allowing it to be accessed via `/content/products/shiny-red-ball`.
+### `sling:alias`
+- Set on a content resource (not a mapping rule) to provide an alternative, "friendly" name for that resource. This is used for generating outgoing links and can also be used to resolve incoming requests. For example, a resource at `/content/products/p-001` could have an alias `shiny-red-ball`, allowing it to be accessed via `/content/products/shiny-red-ball`.
     *   *Code Reference*: Referenced as `ResourceResolverImpl.PROP_ALIAS` and handled in `MapEntries.java` in methods like `doAddAlias` ([L480](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntries.java#L480)) and `loadAlias` ([L703](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntries.java#L703)).
 
--   `sling:vanityPath` & `sling:vanityOrder`: `sling:vanityPath` is set on a content resource to claim a user-friendly URL. These are loaded into the mapping tables as internal redirects. `sling:vanityOrder` (a `Long`) resolves conflicts if multiple resources claim the same vanity path.
+### `sling:vanityPath` & `sling:vanityOrder`: `sling:vanityPath` 
+- is set on a content resource to claim a user-friendly URL. These are loaded into the mapping tables as internal redirects. `sling:vanityOrder` (a `Long`) resolves conflicts if multiple resources claim the same vanity path.
     *   *Code Reference*: `MapEntries.java` `PROP_VANITY_PATH` ([L90](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntries.java#L90)) and `PROP_VANITY_ORDER` ([L92](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntries.java#L92)) are used in methods like `loadVanityPaths` and `loadVanityPath`.
 
 ## Hierarchical Mapping Structures
