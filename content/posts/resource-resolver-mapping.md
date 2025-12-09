@@ -154,6 +154,45 @@ A content resource can have multiple aliases. This has two main effects:
 Each entry in a multivalued `sling:vanityPath` property creates a separate, independent mapping rule. This allows a single content resource to be accessible from multiple distinct vanity URLs. For example, a resource can have `sling:vanityPath` set to `["/my-product", "/products/my-product"]`, and both URLs will resolve to it.
 *   *Code Reference*: `MapEntries.java` `loadVanityPath` method ([L890](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/MapEntries.java#L890)) iterates through `pVanityPaths` to create individual entries.
 
+## Syntax and Format for `resource.resolver.mapping` OSGi Property
+
+The `resource.resolver.mapping` OSGi property, used by `ResourceResolverImpl`, expects a specific syntax and format for its entries. These entries are processed by the `org.apache.sling.resourceresolver.impl.mapping.Mapping` class.
+
+Here's the syntax and format:
+
+**Format:**
+Each entry in the `resource.resolver.mapping` property follows the general pattern:
+`<internalPathPrefix><operator><externalPathPrefix>`
+
+**Syntax Details:**
+
+*   **`<internalPathPrefix>`**: This represents a path prefix within the JCR repository (the "inside" or "from" path).
+*   **`<externalPathPrefix>`**: This represents a path prefix for the external URL (the "outside" or "to" path).
+*   **`<operator>`**: This single character determines the direction of the mapping:
+    *   `:` (colon): The mapping is applied in **both** directions (inbound and outbound).
+    *   `>` (greater than): The mapping is for **inbound** requests only (mapping a request URL path to a resource path).
+    *   `<` (less than): The mapping is for **outbound** requests only (mapping a resource path to a URL path).
+
+**Examples from the codebase (`Mapping.java`):**
+
+The `Mapping.split(String map)` method ([L158](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/Mapping.java#L158)), which parses these configuration strings, uses the following regular expression: `(.+)([:<>])(.+)` ([L58](https://github.com/apache/sling-org-apache-sling-resourceresolver/blob/org.apache.sling.resourceresolver-1.10.0/src/main/java/org/apache/sling/resourceresolver/impl/mapping/Mapping.java#L58)).
+
+*   `"/:/"`: A bidirectional mapping where the root (`/`) maps to itself.
+*   `"/content/:/"`: A bidirectional mapping where `/content/` maps to `/content/`.
+
+**Backward Compatibility:**
+
+The `split` method also handles a deprecated format for bidirectional mappings using a hyphen (`-`) instead of a colon (`:`):
+
+*   `<internalPathPrefix>-<externalPathPrefix>`: Equivalent to `:<internalPathPrefix>:<externalPathPrefix>`.
+
+If the string doesn't match any of the above patterns, it defaults to a bidirectional mapping where both prefixes are the same as the input string: `map - map`.
+
+**Key Points:**
+
+*   These mappings are **simple, literal string-based path prefixes**. They do **not** support regular expressions for the path matching itself, unlike the JCR-based `/etc/map` rules.
+*   The `ResourceResolverImpl` uses these mappings during its `resolve` method and `map` method, leveraging the `MapEntry` objects derived from these configurations.
+
 ## OSGi Mappings vs. JCR Mappings
 
 | Aspect                | OSGi `resource.resolver.mapping`        | JCR `/etc/map`                                       |
